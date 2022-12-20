@@ -31,6 +31,8 @@ async function forwardEmails(db, source, dest) {
     await append(dest, body, { date: attributes.date, mailbox: "INBOX" });
     await addFlags(source, id, ["\\Seen"]);
   }
+
+  log("All messages forwarded");
 }
 
 async function main() {
@@ -79,10 +81,12 @@ async function main() {
   });
 
   // Force first sync
+  log("First check");
   await queue.push();
 
   // Force regular sync
   setInterval(() => {
+    log("Regular check");
     queue.push();
   }, CHECK_INTERVAL);
 }
