@@ -1,5 +1,6 @@
 import "dotenv/config";
 import Imap from "imap";
+import fastq from "fastq";
 import { readDB, saveDB } from "./lib/db.mjs";
 import {
   connect,
@@ -10,6 +11,25 @@ import {
   append,
 } from "./lib/imap.mjs";
 import { log } from "./lib/log.mjs";
+
+async function forwardEmails(db, source, dest) {
+  const unseen = await search(source, ["UNSEEN"]);
+  log(`Found ${unseen.length} new messages`);
+
+  for (const id of unseen) {
+    if (db.messagesFound.has(id)) {
+      log(`Duplicate message ${id}`);
+      continue;
+    }
+
+    log(`Forwarding ${id}`);
+    db.messagesFound.add(id);
+    saveDB(db);
+    const { body, attributes } = await readMsg(source, id);
+    await append(dest, body, { date: attributes.date, mailbox: "INBOX" });
+    await addFlags(source, id, ["\\Seen"]);
+  }
+}
 
 async function main() {
   const db = readDB();
@@ -29,31 +49,35 @@ async function main() {
     tls: true,
   });
 
+  source.on("error", (err) => {
+    log("Source server error:", err);
+    process.exit(1);
+  });
+  dest.on("error", () => {
+    log("Destination server error:", err);
+    process.exit(1);
+  });
+
   await connect(source);
   await connect(dest);
-
   await openBox(source, "INBOX");
-  await openBox(dest, "INBOX");
 
-  const unseen = await search(source, ["UNSEEN"]);
-  log(`Found ${unseen.length} new messages`);
-
-  for (const id of unseen) {
-    if (db.messagesFound.has(id)) {
-      log(`Duplicate message ${id}`);
-      continue;
+  const queue = fastq.promise(async () => {
+    try {
+      await forwardEmails(db, source, dest);
+    } catch (err) {
+      log("Forwarding error:", err);
+      process.exit(1);
     }
+  }, 1);
 
-    log(`Forwarding ${id}`);
-    db.messagesFound.add(id);
-    saveDB(db);
-    const { body, attributes } = await readMsg(source, id);
-    await append(dest, body, { date: attributes.date });
-    await addFlags(source, id, ["\\Seen"]);
-  }
+  source.on("mail", () => {
+    log("New messages");
+    queue.push();
+  });
 
-  source.end();
-  dest.end();
+  // Force first sync
+  queue.push();
 }
 
 main();
