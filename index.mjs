@@ -13,6 +13,7 @@ import {
 import { log } from "./lib/log.mjs";
 
 const CHECK_INTERVAL = process.env.CHECK_INTERVAL || 60 * 1000;
+const daemonMode = process.argv[2] === "daemon";
 
 async function forwardEmails(db, source, dest) {
   const unseen = await search(source, ["UNSEEN"]);
@@ -37,6 +38,8 @@ async function forwardEmails(db, source, dest) {
 
 async function main() {
   const db = readDB();
+
+  log("Connecting");
 
   const source = new Imap({
     user: process.env.SOURCE_USER,
@@ -65,6 +68,13 @@ async function main() {
   await connect(source);
   await connect(dest);
   await openBox(source, "INBOX");
+
+  if (!daemonMode) {
+    await forwardEmails(db, source, dest);
+    process.exit(0);
+  }
+
+  log("Starting daemon");
 
   const queue = fastq.promise(async () => {
     try {
