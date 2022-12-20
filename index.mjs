@@ -12,6 +12,8 @@ import {
 } from "./lib/imap.mjs";
 import { log } from "./lib/log.mjs";
 
+const CHECK_INTERVAL = process.env.CHECK_INTERVAL || 60 * 1000;
+
 async function forwardEmails(db, source, dest) {
   const unseen = await search(source, ["UNSEEN"]);
   log(`Found ${unseen.length} new messages`);
@@ -77,7 +79,12 @@ async function main() {
   });
 
   // Force first sync
-  queue.push();
+  await queue.push();
+
+  // Force regular sync
+  setInterval(() => {
+    queue.push();
+  }, CHECK_INTERVAL);
 }
 
 main();
