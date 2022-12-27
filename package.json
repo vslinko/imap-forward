@@ -4,7 +4,6 @@
   "description": "Yahoo Mail wants money for email forwarding to other mailboxes. I don't want to pay.",
   "dependencies": {
     "dotenv": "^16.0.3",
-    "fastq": "^1.14.0",
     "imap": "^0.8.19"
   }
 }

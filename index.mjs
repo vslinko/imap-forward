@@ -1,6 +1,5 @@
 import "dotenv/config";
 import Imap from "imap";
-import fastq from "fastq";
 import { readDB, saveDB } from "./lib/db.mjs";
 import {
   connect,
@@ -12,10 +11,11 @@ import {
 } from "./lib/imap.mjs";
 import { log } from "./lib/log.mjs";
 
-const CHECK_INTERVAL = process.env.CHECK_INTERVAL || 60 * 1000;
-const daemonMode = process.argv[2] === "daemon";
+async function forwardEmails(db, source, dest, sourceMailbox, destMailbox) {
+  log(`Forwarding ${sourceMailbox} -> ${destMailbox}`);
 
-async function forwardEmails(db, source, dest) {
+  await openBox(source, sourceMailbox);
+
   const unseen = await search(source, ["UNSEEN"]);
   log(`Found ${unseen.length} new messages`);
 
@@ -29,7 +29,7 @@ async function forwardEmails(db, source, dest) {
     db.messagesFound.add(id);
     saveDB(db);
     const { body, attributes } = await readMsg(source, id);
-    await append(dest, body, { date: attributes.date, mailbox: "INBOX" });
+    await append(dest, body, { date: attributes.date, mailbox: destMailbox });
     await addFlags(source, id, ["\\Seen"]);
   }
 
@@ -41,12 +41,14 @@ async function main() {
 
   log("Connecting");
 
+  const authTimeout = Number(process.env.AUTH_TIMEOUT || 5000);
   const source = new Imap({
     user: process.env.SOURCE_USER,
     password: process.env.SOURCE_PASSWORD,
     host: process.env.SOURCE_HOST,
     port: 993,
     tls: true,
+    authTimeout,
   });
   const dest = new Imap({
     user: process.env.DEST_USER,
@@ -54,6 +56,7 @@ async function main() {
     host: process.env.DEST_HOST,
     port: 993,
     tls: true,
+    authTimeout,
   });
 
   source.on("error", (err) => {
@@ -67,38 +70,20 @@ async function main() {
 
   await connect(source);
   await connect(dest);
-  await openBox(source, "INBOX");
 
-  if (!daemonMode) {
-    await forwardEmails(db, source, dest);
-    process.exit(0);
+  try {
+    await forwardEmails(db, source, dest, "Inbox", "INBOX");
+    await forwardEmails(db, source, dest, "Bulk", "Junk");
+  } catch (err) {
+    log("Forwarding error:", err);
+    process.exit(1);
   }
 
-  log("Starting daemon");
-
-  const queue = fastq.promise(async () => {
-    try {
-      await forwardEmails(db, source, dest);
-    } catch (err) {
-      log("Forwarding error:", err);
-      process.exit(1);
-    }
-  }, 1);
-
-  source.on("mail", () => {
-    log("New messages");
-    queue.push();
-  });
-
-  // Force first sync
-  log("First check");
-  await queue.push();
-
-  // Force regular sync
-  setInterval(() => {
-    log("Regular check");
-    queue.push();
-  }, CHECK_INTERVAL);
+  process.exit(0);
 }
 
 main();
+
+// timeAfterUnblockTillBlocked = 15m
+// successTriesAfterUnblockTillBlocked = 5
+// timeAfterBlockTillUnblocked = 40m
