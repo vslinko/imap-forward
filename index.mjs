@@ -41,7 +41,7 @@ async function main() {
 
   log("Connecting");
 
-  const authTimeout = Number(process.env.AUTH_TIMEOUT || 5000);
+  const authTimeout = Number(process.env.AUTH_TIMEOUT_MS || 5000);
   const source = new Imap({
     user: process.env.SOURCE_USER,
     password: process.env.SOURCE_PASSWORD,
