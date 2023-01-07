@@ -63,7 +63,7 @@ async function main() {
     log("Source server error:", err);
     process.exit(1);
   });
-  dest.on("error", () => {
+  dest.on("error", (err) => {
     log("Destination server error:", err);
     process.exit(1);
   });
