@@ -1,4 +1,7 @@
-import "dotenv/config";
+import * as dotenv from 'dotenv';
+dotenv.config({
+  path: './data/config',
+});
 import Imap from "imap";
 import { readDB, saveDB } from "./lib/db.mjs";
 import {
