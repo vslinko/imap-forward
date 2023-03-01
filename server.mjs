@@ -1,4 +1,7 @@
-import "dotenv/config";
+import * as dotenv from 'dotenv';
+dotenv.config({
+  path: './data/config',
+});
 import express from "express";
 import { fork } from "node:child_process";
 import { log } from "./lib/log.mjs";

@@ -1,0 +1,9 @@
+.dockerignore
+.git
+.gitignore
+build.sh
+data/config
+data/db.json
+Dockerfile
+node_modules
+README.md
