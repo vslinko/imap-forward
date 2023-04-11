@@ -1,6 +1,6 @@
-import * as dotenv from 'dotenv';
+import * as dotenv from "dotenv";
 dotenv.config({
-  path: './data/config',
+  path: "./data/config",
 });
 import Imap from "imap";
 import { readDB, saveDB } from "./lib/db.mjs";
@@ -13,6 +13,27 @@ import {
   append,
 } from "./lib/imap.mjs";
 import { log } from "./lib/log.mjs";
+
+function parseFrom(body) {
+  for (const line of body.split("\n")) {
+    if (line.trim() === "") {
+      break;
+    }
+    const matches = /^from: .*<(.+)>$/i.exec(line);
+    if (matches) {
+      return matches[1];
+    }
+  }
+  return null;
+}
+
+function shouldForward(body) {
+  if (["subscrib@e.litres.ru"].includes(parseFrom(body))) {
+    return false;
+  }
+
+  return true;
+}
 
 async function forwardEmails(db, source, dest, sourceMailbox, destMailbox) {
   log(`Forwarding ${sourceMailbox} -> ${destMailbox}`);
@@ -32,7 +53,9 @@ async function forwardEmails(db, source, dest, sourceMailbox, destMailbox) {
     db.messagesFound.add(id);
     saveDB(db);
     const { body, attributes } = await readMsg(source, id);
-    await append(dest, body, { date: attributes.date, mailbox: destMailbox });
+    if (shouldForward(body.toString("utf-8"))) {
+      await append(dest, body, { date: attributes.date, mailbox: destMailbox });
+    }
     await addFlags(source, id, ["\\Seen"]);
   }
 
