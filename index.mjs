@@ -15,27 +15,44 @@ import {
 import { log } from "./lib/log.mjs";
 
 function parseFrom(body) {
-  for (const line of body.split("\n")) {
+  const lineBreak = body.includes("\r\n") ? "\r\n" : "\n";
+
+  for (const line of body.split(lineBreak)) {
     if (line.trim() === "") {
       break;
     }
+
     const matches = /^from: .*<(.+)>$/i.exec(line);
     if (matches) {
       return matches[1];
     }
   }
+
   return null;
 }
 
-function shouldForward(body) {
-  if (["subscrib@e.litres.ru"].includes(parseFrom(body))) {
+function shouldArchive(from) {
+  if (["ofdreceipt@beeline.ru", "echeck@1-ofd.ru"].includes(from)) {
+    return true;
+  }
+
+  return false;
+}
+
+function shouldForward(from) {
+  if (["subscrib@e.litres.ru"].includes(from)) {
     return false;
   }
 
   return true;
 }
 
-async function forwardEmails(db, source, dest, sourceMailbox, destMailbox) {
+async function forwardEmails(
+  db,
+  source,
+  dest,
+  { sourceMailbox, destMailbox, archiveMailbox }
+) {
   log(`Forwarding ${sourceMailbox} -> ${destMailbox}`);
 
   await openBox(source, sourceMailbox);
@@ -52,10 +69,25 @@ async function forwardEmails(db, source, dest, sourceMailbox, destMailbox) {
     log(`Forwarding ${id}`);
     db.messagesFound.add(id);
     saveDB(db);
+
     const { body, attributes } = await readMsg(source, id);
-    if (shouldForward(body.toString("utf-8"))) {
-      await append(dest, body, { date: attributes.date, mailbox: destMailbox });
+    const from = parseFrom(body.toString("utf-8"));
+
+    if (shouldForward(from)) {
+      if (archiveMailbox && shouldArchive(from)) {
+        await append(dest, body, {
+          date: attributes.date,
+          mailbox: archiveMailbox,
+          flags: ["\\Seen"],
+        });
+      } else {
+        await append(dest, body, {
+          date: attributes.date,
+          mailbox: destMailbox,
+        });
+      }
     }
+
     await addFlags(source, id, ["\\Seen"]);
   }
 
@@ -98,8 +130,15 @@ async function main() {
   await connect(dest);
 
   try {
-    await forwardEmails(db, source, dest, "Inbox", "INBOX");
-    await forwardEmails(db, source, dest, "Bulk", "Junk");
+    await forwardEmails(db, source, dest, {
+      sourceMailbox: "Inbox",
+      destMailbox: "INBOX",
+      archiveMailbox: "Archive",
+    });
+    await forwardEmails(db, source, dest, {
+      sourceMailbox: "Bulk",
+      destMailbox: "Junk",
+    });
   } catch (err) {
     log("Forwarding error:", err);
     process.exit(1);
