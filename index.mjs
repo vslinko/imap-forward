@@ -144,8 +144,9 @@ async function reportSuccess(start, end, forwarded, skipped) {
 }
 
 async function main() {
+  const configFile = process.env.CONFIG_FILE || "./data/config";
   dotenv.config({
-    path: "./data/config",
+    path: configFile,
   });
 
   const start = timeNs();
