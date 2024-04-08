@@ -1,7 +1,4 @@
 import * as dotenv from "dotenv";
-dotenv.config({
-  path: "./data/config",
-});
 import Imap from "imap";
 import { readDB, saveDB } from "./lib/db.mjs";
 import {
@@ -32,7 +29,11 @@ function parseFrom(body) {
 }
 
 function shouldArchive(from) {
-  if (["ofdreceipt@beeline.ru", "echeck@1-ofd.ru"].includes(from)) {
+  const forwardButArchiveEmails = (
+    process.env.FORWARD_BUT_ARCHIVE_EMAILS || ""
+  ).split(",");
+
+  if (forwardButArchiveEmails.includes(from)) {
     return true;
   }
 
@@ -40,7 +41,11 @@ function shouldArchive(from) {
 }
 
 function shouldForward(from) {
-  if (["subscrib@e.litres.ru"].includes(from)) {
+  const doNotForwardEmails = (process.env.DO_NOT_FORWARD_EMAILS || "").split(
+    ","
+  );
+
+  if (doNotForwardEmails.includes(from)) {
     return false;
   }
 
@@ -54,6 +59,9 @@ async function forwardEmails(
   { sourceMailbox, destMailbox, archiveMailbox }
 ) {
   log(`Forwarding ${sourceMailbox} -> ${destMailbox}`);
+
+  let forwared = 0;
+  let skipped = 0;
 
   await openBox(source, sourceMailbox);
 
@@ -86,15 +94,61 @@ async function forwardEmails(
           mailbox: destMailbox,
         });
       }
+      forwared++;
+    } else {
+      skipped++;
     }
 
     await addFlags(source, id, ["\\Seen"]);
   }
 
   log("All messages forwarded");
+
+  return { forwared, skipped };
+}
+
+async function report(body) {
+  try {
+    const baseUrl = process.env.INFLUXDB_BASE_URL;
+    const org = process.env.INFLUXDB_ORG;
+    const bucket = process.env.INFLUXDB_BUCKET;
+    const token = process.env.INFLUXDB_TOKEN;
+    await fetch(`${baseUrl}/api/v2/write?org=${org}&bucket=${bucket}`, {
+      method: "POST",
+      headers: {
+        Authorization: `Token ${token}`,
+      },
+      body,
+    });
+  } catch (err) {
+    console.log(err);
+  }
+}
+
+function timeNs() {
+  return process.hrtime.bigint();
+}
+
+async function reportError(start, end) {
+  const duration = end - start;
+  const now = Date.now() * 1000000;
+  await report(`imap_forward,status="error" duration=${duration}i ${now}`);
+}
+
+async function reportSuccess(start, end, forwarded, skipped) {
+  const duration = end - start;
+  const now = Date.now() * 1000000;
+  await report(
+    `imap_forward,status="success" duration=${duration}i,forwarded=${forwarded}i,skipped=${skipped} ${now}`
+  );
 }
 
 async function main() {
+  dotenv.config({
+    path: "./data/config",
+  });
+
+  const start = timeNs();
   const db = readDB();
 
   log("Connecting");
@@ -117,32 +171,44 @@ async function main() {
     authTimeout,
   });
 
-  source.on("error", (err) => {
+  source.on("error", async (err) => {
     log("Source server error:", err);
+    await reportError(start, timeNs());
     process.exit(1);
   });
-  dest.on("error", (err) => {
+  dest.on("error", async (err) => {
     log("Destination server error:", err);
+    await reportError(start, timeNs());
     process.exit(1);
   });
 
   await connect(source);
   await connect(dest);
 
+  let forwarded = 0;
+  let skipped = 0;
+
   try {
-    await forwardEmails(db, source, dest, {
+    const inboxRes = await forwardEmails(db, source, dest, {
       sourceMailbox: "Inbox",
-      destMailbox: "INBOX",
+      destMailbox: "Inbox",
       archiveMailbox: "Archive",
     });
-    await forwardEmails(db, source, dest, {
+    forwarded += inboxRes.forwared;
+    skipped += inboxRes.skipped;
+    const junkRes = await forwardEmails(db, source, dest, {
       sourceMailbox: "Bulk",
       destMailbox: "Junk",
     });
+    forwarded += junkRes.forwared;
+    skipped += junkRes.skipped;
   } catch (err) {
     log("Forwarding error:", err);
+    await reportError(start, timeNs());
     process.exit(1);
   }
+
+  await reportSuccess(start, timeNs(), forwarded, skipped);
 
   process.exit(0);
 }
