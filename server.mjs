@@ -1,6 +1,6 @@
-import * as dotenv from 'dotenv';
+import * as dotenv from "dotenv";
 dotenv.config({
-  path: './data/config',
+  path: process.env.CONFIG_FILE || "./data/config",
 });
 import express from "express";
 import { fork } from "node:child_process";
