@@ -1,5 +1,7 @@
 import * as dotenv from "dotenv";
 import Imap from "imap";
+import fs from "fs/promises";
+import util from "util";
 import { readDB, saveDB } from "./lib/db.mjs";
 import {
   connect,
@@ -10,55 +12,16 @@ import {
   append,
 } from "./lib/imap.mjs";
 import { log } from "./lib/log.mjs";
-
-function parseFrom(body) {
-  const lineBreak = body.includes("\r\n") ? "\r\n" : "\n";
-
-  for (const line of body.split(lineBreak)) {
-    if (line.trim() === "") {
-      break;
-    }
-
-    const matches = /^from: .*<(.+)>$/i.exec(line);
-    if (matches) {
-      return matches[1];
-    }
-  }
-
-  return null;
-}
-
-function shouldArchive(from) {
-  const forwardButArchiveEmails = (
-    process.env.FORWARD_BUT_ARCHIVE_EMAILS || ""
-  ).split(",");
-
-  if (forwardButArchiveEmails.includes(from)) {
-    return true;
-  }
-
-  return false;
-}
-
-function shouldForward(from) {
-  const doNotForwardEmails = (process.env.DO_NOT_FORWARD_EMAILS || "").split(
-    ","
-  );
-
-  if (doNotForwardEmails.includes(from)) {
-    return false;
-  }
-
-  return true;
-}
+import { parse, evaluate } from "./lib/sieve.mjs";
+import { simpleParser } from "mailparser";
 
 async function forwardEmails(
   db,
   source,
   dest,
-  { sourceMailbox, destMailbox, archiveMailbox }
+  { sourceMailbox, destMailbox, sieveScript }
 ) {
-  log(`Forwarding ${sourceMailbox} -> ${destMailbox}`);
+  log(`Processing ${sourceMailbox}`);
 
   let forwared = 0;
   let skipped = 0;
@@ -79,21 +42,37 @@ async function forwardEmails(
     saveDB(db);
 
     const { body, attributes } = await readMsg(source, id);
-    const from = parseFrom(body.toString("utf-8"));
 
-    if (shouldForward(from)) {
-      if (archiveMailbox && shouldArchive(from)) {
-        await append(dest, body, {
-          date: attributes.date,
-          mailbox: archiveMailbox,
-          flags: ["\\Seen"],
-        });
-      } else {
-        await append(dest, body, {
-          date: attributes.date,
-          mailbox: destMailbox,
-        });
+    let mailDescMailbox = destMailbox;
+    let keep = true;
+    let flags = [];
+
+    if (sieveScript) {
+      try {
+        const parsedMail = await simpleParser(body);
+        const result = evaluate(sieveScript, parsedMail);
+        if (result.keep !== null) {
+          keep = result.keep;
+        }
+        if (result.fileinto) {
+          mailDescMailbox = result.fileinto;
+        }
+        flags = Array.from(result.flags);
+      } catch (err) {
+        log("Sieve script evaluation error:", err);
       }
+    }
+
+    log(
+      `keep = ${keep} mailbox = ${mailDescMailbox} flags = [${flags.join(" ")}]`
+    );
+
+    if (keep) {
+      await append(dest, body, {
+        date: attributes.date,
+        mailbox: mailDescMailbox,
+        flags,
+      });
       forwared++;
     } else {
       skipped++;
@@ -152,6 +131,27 @@ async function main() {
   const start = timeNs();
   const db = readDB();
 
+  let sieveScript;
+  if (process.env.SIEVE_SCRIPT) {
+    try {
+      log(`Loading sieve script ${process.env.SIEVE_SCRIPT}`);
+      const src = await fs.readFile(process.env.SIEVE_SCRIPT, "utf8");
+      sieveScript = parse(src);
+      if (process.env.DEBUG_SIEVE) {
+        console.log(
+          util.inspect(sieveScript, {
+            showHidden: false,
+            depth: null,
+            colors: true,
+          })
+        );
+        console.log(src);
+      }
+    } catch (err) {
+      log("Sieve script loading error:", err);
+    }
+  }
+
   log("Connecting");
 
   const authTimeout = Number(process.env.AUTH_TIMEOUT_MS || 5000);
@@ -193,13 +193,14 @@ async function main() {
     const inboxRes = await forwardEmails(db, source, dest, {
       sourceMailbox: "Inbox",
       destMailbox: "Inbox",
-      archiveMailbox: "Archive",
+      sieveScript,
     });
     forwarded += inboxRes.forwared;
     skipped += inboxRes.skipped;
     const junkRes = await forwardEmails(db, source, dest, {
       sourceMailbox: "Bulk",
       destMailbox: "Junk",
+      sieveScript,
     });
     forwarded += junkRes.forwared;
     skipped += junkRes.skipped;
