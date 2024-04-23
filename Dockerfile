@@ -6,6 +6,6 @@ RUN npm ci
 COPY index.mjs server.mjs /imap-forward/
 COPY lib/* /imap-forward/lib/
 COPY data/config.example /imap-forward/data/
-ENTRYPOINT ["node", "server.mjs"]
+ENTRYPOINT ["tini", "--", "node", "server.mjs"]
 EXPOSE 3000
 VOLUME /imap-forward/data
